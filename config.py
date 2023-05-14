@@ -11,7 +11,7 @@ NUM_LABELS_PER_ROW, NUM_LABELS_PER_COLUMN = 4, 10
 
 LABEL_BORDER_MM = 5 * mm
 
-font_path = "font\FiraCode-Regular.ttf"
+font_path = "fonts\FiraCode-Regular.ttf"
 font_size = 72
 
 barcode_digits = 5
