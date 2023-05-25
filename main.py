@@ -1,10 +1,12 @@
 import os
 from typing import Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont
-import qrcode
+import segno
 from config import *
-from reportlab.lib.units import mm
 from converters import mm_to_pixels
+
+from aztec_code_generator import AztecCode
+
 
 a4_width: int = mm_to_pixels(A4_WIDTH_MM)
 a4_height: int = mm_to_pixels(A4_HEIGHT_MM)
@@ -64,27 +66,101 @@ def inventory_label(num: int, prefix: Optional[str] = None) -> str:
     if global_barcode_prefix:
         inv = global_barcode_prefix + inv
 
-    return inv
+    return inv 
 
 
-def generate_qrcode(value: str, qr_size: int) -> Tuple[Image.Image, float]:
+# def generate_qrcode(value: str, qr_size: int) -> Tuple[Image.Image, float]:
+#     """Генерирует изображение с QR-кодом для заданного значения.
+
+#     Аргументы:
+#         value: Значение, которое будет закодировано в QR-код.
+
+#     Возвращает:
+#         Кортеж, содержащий сгенерированное изображение с QR-кодом и размер модуля.
+#     """
+#     qr = qrcode.QRCode(
+#         version=None, error_correction=qrcode.ERROR_CORRECT_H, box_size=1, border=0
+#     )
+#     qr.add_data(value)
+#     qr.make(fit=True)
+#     qr_image = qr.make_image(fill_color="black", back_color="white").convert("1")
+#     module_size = qr_size / qr.modules_count
+
+#     return qr_image.resize((qr_size, qr_size)), module_size
+
+
+
+qr_versions = {
+    1: 21,
+    2: 25,
+    3: 29,
+    4: 33,
+    5: 37,
+    6: 41,
+    7: 45,
+    8: 49,
+    9: 53,
+    10: 57,
+    11: 61,
+    12: 65,
+    13: 69,
+    14: 73,
+    15: 77,
+    16: 81,
+    17: 85,
+    18: 89,
+    19: 93,
+    20: 97,
+    21: 101,
+    22: 105,
+    23: 109,
+    24: 113,
+    25: 117,
+    26: 121,
+    27: 125,
+    28: 129,
+    29: 133,
+    30: 137,
+    31: 141,
+    32: 145,
+    33: 149,
+    34: 153,
+    35: 157,
+    36: 161,
+    37: 165,
+    38: 169,
+    39: 173,
+    40: 177,
+    'M1': 11,
+    'M2': 13,
+    'M3': 15,
+    'M4': 17,
+}
+
+def generate_qrcode(value: str, qr_size: int, is_micro: bool = True) -> Tuple[Image.Image, float]:
     """Генерирует изображение с QR-кодом для заданного значения.
 
-    Аргументы:
+    Аргументы:p
         value: Значение, которое будет закодировано в QR-код.
+        qr_size: Размер изображения с QR-кодом в пикселях.
+        is_micro: Флаг, указывающий, нужно ли генерировать Micro QR.
 
     Возвращает:
         Кортеж, содержащий сгенерированное изображение с QR-кодом и размер модуля.
     """
-    qr = qrcode.QRCode(
-        version=None, error_correction=qrcode.ERROR_CORRECT_H, box_size=1, border=0
-    )
-    qr.add_data(value)
-    qr.make(fit=True)
-    qr_image = qr.make_image(fill_color="black", back_color="white").convert("1")
-    module_size = qr_size / qr.modules_count
-
+    qrcode = segno.make(value, micro=is_micro)
+    qr_image = qrcode.to_pil(border=0)
+    module_size = qr_size / qr_versions[qrcode.version]
     return qr_image.resize((qr_size, qr_size)), module_size
+
+
+def generate_azteccode(value: str, code_size: int) -> Tuple[Image.Image, float]:
+    aztec_code = az
+    qr_image = qrcode.to_pil(border=0)
+    module_size = qr_size / qr_versions[qrcode.version]
+    return qr_image.resize((qr_size, qr_size)), module_size
+
+
 
 
 def generate_label(value: str, label_size: Tuple[int, int], qr_size: int) -> Image:
@@ -102,10 +178,12 @@ def generate_label(value: str, label_size: Tuple[int, int], qr_size: int) -> Ima
     # Создаем изображение наклейки
     label_image = Image.new("1", label_size, color=1)
     label_draw = ImageDraw.Draw(label_image)
+    is_micro = True
 
     # Генерируем изображение с QR-кодом
-    qr_image, module_size = generate_qrcode(value, qr_size)
-    qr_border = round(module_size * 4)
+    qr_image, module_size = generate_qrcode(value, qr_size, is_micro)
+    # вычисляем qr_border исходя из типа QR или Micro
+    qr_border = round(module_size * 2) if is_micro else round(module_size * 4)
     qr_margin = max(qr_border - label_border, 0)
     if qr_margin > 0:
         qr_image = qr_image.resize(
@@ -183,10 +261,19 @@ def main() -> None:
         label_image.save(f"labels/{index}.bmp")
 
     all_labels_image = complit(num_labels, label_size)
+    all_labels_image = crop_labels(all_labels_image)
     # Сохраняем полученное изображение на жесткий диск
     all_labels_image.save("all_labels.bmp")
     os.startfile("all_labels.bmp", "print")
 
+# Обрезаем поля (для HP 428, который добавляет свои поля при печати)
+def crop_labels(all_labels_image: Image) -> Image:
+    crop_border = label_border / 8 * 5
+    left = int(crop_border)
+    top = int(crop_border)
+    right = int(a4_width - crop_border)
+    bottom = int(a4_height - crop_border)
+    return all_labels_image.crop((left, top, right, bottom))
 
 def complit(num_labels, label_size: Tuple[int, int]) -> Image:
     """
@@ -220,13 +307,7 @@ def complit(num_labels, label_size: Tuple[int, int]) -> Image:
         # Размещаем текущую наклейку на листе A4
         all_labels_image.paste(label_image, (x, y))
 
-    # Обрезаем поля (для HP 428, который добавляет свои поля при печати)
-    crop_border = label_border / 8 * 5
-    left = int(crop_border)
-    top = int(crop_border)
-    right = int(a4_width - crop_border)
-    bottom = int(a4_height - crop_border)
-    all_labels_image = all_labels_image.crop((left, top, right, bottom))
+    
     return all_labels_image
 
 
