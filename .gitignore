@@ -4,4 +4,5 @@
 /all_labels1.bmp
 /labels
 /__pycache__
+# Исключаем рабочий файл clients.yaml из репозитория
 clients.yaml
