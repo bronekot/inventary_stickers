@@ -16,7 +16,7 @@ num_labels: int = NUM_LABELS_PER_ROW * NUM_LABELS_PER_COLUMN
 label_border: int = mm_to_pixels(LABEL_BORDER_MM)
 
 
-def generate_barcode_text(value: str, width: int) -> Image:
+def generate_barcode_text_image(value: str, width: int, qr_margin: int) -> Image:
     """Генерирует изображение с инвентарным номером для заданного значения.
 
     Args:
@@ -27,24 +27,44 @@ def generate_barcode_text(value: str, width: int) -> Image:
         Image: изображение с текстом-картинкой
     """
     global font_size
+    font_size_temp = font_size
     # width = round(width)
     # Создаем изображение штрих-кода
-    barcode_image = Image.new("1", (width, font_size), color=1)
-    barcode_draw = ImageDraw.Draw(barcode_image)
-    font = ImageFont.truetype(font_path, font_size)
+    font_height = 0
+    
     while True:
-        font = ImageFont.truetype(font_path, font_size)
+        font = ImageFont.truetype(font_path, font_size_temp)
+        barcode_image = Image.new("1", (width - max(int(font.getsize('p')[1]/2), qr_margin), font.getsize('Pp')[1]), color=1)
+        barcode_draw = ImageDraw.Draw(barcode_image)
         value_bbox = barcode_draw.textbbox((0, 0), value, font=font)
         value_size = (value_bbox[2] - value_bbox[0], value_bbox[3] - value_bbox[1])
         if value_size[0] < barcode_image.width and value_size[1] < barcode_image.height:
+            font_height = font.getsize('Pp')[1]
             break
         else:
-            font_size -= 1
+            font_size_temp -= 1
     barcode_draw.text((0, 0), value, font=font, fill=None)
-    return barcode_image
+    return barcode_image, font_height
 
 
-def inventory_label(num: int, prefix: Optional[str] = None) -> str:
+import yaml
+
+def get_client_name_by_prefix(prefix: Optional[str]) -> Optional[str]:
+    """
+    Возвращает название клиента по заданному префиксу.
+
+    Args:
+        prefix (str, optional): Префикс клиента.
+
+    Returns:
+        str: Название клиента, если префикс найден в словаре клиентов. Иначе - None.
+    """
+    with open('clients.yaml', 'r', encoding='utf-8') as f:
+        clients = yaml.safe_load(f)
+
+    return clients.get(prefix.upper()) if prefix else None
+
+def inventory_label(num: int, prefix: Optional[str] = None) -> Tuple[str, Optional[str]]:
     """
     Генерирует ярлык для инвентаря на основе заданного номера и необязательного префикса.
 
@@ -53,20 +73,23 @@ def inventory_label(num: int, prefix: Optional[str] = None) -> str:
         prefix (str, optional): Префикс для добавления к ярлыку перед номером.
 
     Returns:
-        str: Сгенерированный ярлык для инвентаря.
+        Tuple[str, Optional[str]]: Кортеж из сгенерированного ярлыка и названия клиента (если клиент найден по префиксу).
     """
 
     global global_barcode_prefix
 
+    client_name = get_client_name_by_prefix(prefix)
+
     if prefix is not None:
-        inv = prefix + str(num).zfill(barcode_digits - len(prefix))
+        inv = prefix.upper() + str(num).zfill(barcode_digits - len(prefix))
     else:
         inv = str(num).zfill(barcode_digits)
 
     if global_barcode_prefix:
-        inv = global_barcode_prefix + inv
+        inv =  global_barcode_prefix.lower() + inv
 
-    return inv 
+    return inv, client_name
+
 
 
 # def generate_qrcode(value: str, qr_size: int) -> Tuple[Image.Image, float]:
@@ -155,15 +178,13 @@ def generate_qrcode(value: str, qr_size: int, is_micro: bool = True) -> Tuple[Im
 
 
 def generate_azteccode(value: str, code_size: int) -> Tuple[Image.Image, float]:
-    aztec_code = az
-    qr_image = qrcode.to_pil(border=0)
-    module_size = qr_size / qr_versions[qrcode.version]
-    return qr_image.resize((qr_size, qr_size)), module_size
+    aztec_code = AztecCode(value, ec_percent=80)
+    aztec_image = aztec_code.to_pil()
+    module_size = code_size / aztec_code.size
+    return aztec_image.resize((code_size, code_size)), module_size
 
 
-
-
-def generate_label(value: str, label_size: Tuple[int, int], qr_size: int) -> Image:
+def generate_label(value: str, label_text: str, label_size: Tuple[int, int], qr_size: int) -> Image:
     """
     Генерирует изображение с наклейкой для заданного значения.
 
@@ -179,11 +200,19 @@ def generate_label(value: str, label_size: Tuple[int, int], qr_size: int) -> Ima
     label_image = Image.new("1", label_size, color=1)
     label_draw = ImageDraw.Draw(label_image)
     is_micro = True
+    is_aztec = True
 
     # Генерируем изображение с QR-кодом
-    qr_image, module_size = generate_qrcode(value, qr_size, is_micro)
-    # вычисляем qr_border исходя из типа QR или Micro
-    qr_border = round(module_size * 2) if is_micro else round(module_size * 4)
+    if is_aztec:
+        qr_image, module_size = generate_azteccode(value, qr_size)
+    else:
+        qr_image, module_size = generate_qrcode(value, qr_size, is_micro)
+    
+    # вычисляем qr_border исходя из типа QR или Micro или Aztec
+    if is_aztec:
+        qr_border = 0
+    else:
+        qr_border = round(module_size * 2) if is_micro else round(module_size * 4)
     qr_margin = max(qr_border - label_border, 0)
     if qr_margin > 0:
         qr_image = qr_image.resize(
@@ -191,20 +220,79 @@ def generate_label(value: str, label_size: Tuple[int, int], qr_size: int) -> Ima
         )
 
     # Генерируем изображение с текстом штрих-кода
-    barcode_text_image = generate_barcode_text(
-        value, label_width - qr_image.width - qr_margin - qr_border
+    barcode_text_image, font_height_barcode_text_image = generate_barcode_text_image(
+        value, label_width - qr_image.width - qr_margin - qr_border, qr_margin
     )
-
-    # Склеиваем изображения
-    label_draw.text(
-        (0, 0), value, font=ImageFont.truetype(font_path, font_size), fill=0
+    # Генерируем изображение с текстом штрих-кода
+    label_text_image = add_text_to_image(
+        label_text, font_path, font_size, 0, 
+        (0, 0, label_width - qr_image.width - qr_margin - qr_border, label_height - barcode_text_image.size[1]),
+        (label_width - qr_image.width - qr_margin - qr_border, label_height - barcode_text_image.size[1])
     )
+    # Размещаем текстлейбла
+    label_image.paste(label_text_image, (0,0))
     # Размещаем изображение с QR-кодом
     label_image.paste(qr_image, (label_width - qr_image.width - qr_margin, qr_margin))
-    # Размещаем изображение с текстом
-    label_image.paste(barcode_text_image, (0, label_height - font_size))
+    # Размещаем изображение с номером
+    label_image.paste(barcode_text_image, (0, label_height - int(font_height_barcode_text_image)))
 
     return label_image
+
+from PIL import Image, ImageDraw, ImageFont
+from functools import lru_cache
+import textwrap
+
+@lru_cache(maxsize=None)
+def add_text_to_image(text, font_path, font_size, text_color, text_position, image_size):
+    image = Image.new('RGBA', image_size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(image)
+    font_size_temp = font_size
+
+    current_line = ''
+    while True:
+        font = ImageFont.truetype(font_path, font_size_temp)
+        word_width = font.getsize('a')[0]
+        lines = []
+        max_width = 0
+        # Разбиваем текст на строки по символу перевода строки
+        text_lines = text.split('\n')
+        for line in text_lines:
+            # Расчет максимальной длины строки
+            max_length_text = int(text_position[2] / word_width) - 1
+            # Используем textwrap.wrap() для разбиения строки на части
+            for wrapped_line in textwrap.wrap(line, max_length_text, break_long_words=False):
+                # Удаляем пробелы с начала и конца строки
+                wrapped_line = wrapped_line.strip()
+                line_width = draw.textsize(wrapped_line, font=font)[0]
+                if line_width <= text_position[2]:
+                    lines.append(wrapped_line)
+                else:
+                    # Если строка не влезает в заданный размер, разбиваем ее на части
+                    # и добавляем части в список строк
+                    lines.extend(textwrap.wrap(wrapped_line, max_length_text, break_long_words=False))
+                max_width = max(max_width, line_width)
+
+        lines.append(current_line.strip())
+
+        # Если все строки вписываются в заданный размер, то выходим из цикла
+        if sum(draw.textsize(line, font=font)[1] for line in lines) <= text_position[3] and \
+           max(draw.textsize(line, font=font)[0] for line in lines) <= text_position[2] - word_width:
+            break
+
+        # Иначе уменьшаем размер шрифта и повторяем процедуру
+        font_size_temp -= 1
+
+    # Рисуем текст на изображении
+    y = text_position[1]
+    for line in lines:
+        print(line)
+        draw.text((text_position[0], y), line, font=font, fill=text_color)
+        y += draw.textsize(line, font=font)[1]
+
+    return image
+
+
+
 
 
 def main() -> None:
@@ -219,6 +307,12 @@ def main() -> None:
     """
     start_label_number: int = int(input("Введите стартовый инвентарный номер: "))
     prefix: Optional[str] = input("Введите префикс [по умолчанию префикса нет]: ")
+    while prefix and not prefix.isalpha():
+        print("Ошибка! Префикс должен содержать только буквы латинского алфавита.")
+        prefix = input("Введите префикс [по умолчанию префикса нет]: ")
+    if not prefix:
+        prefix = None
+    
     try:
         num_labels_per_row = int(
             input(
@@ -247,21 +341,17 @@ def main() -> None:
     # Вычисляем максимальный размер QR-кода. В дальнейшем размер может уменьшиться, чтобы соответствовать спецификации отступа в 4 модуля.
     qr_size_max: int = int(min(label_width, label_height))
 
-    while prefix and not prefix.isalpha():
-        print("Ошибка! Префикс должен содержать только буквы латинского алфавита.")
-        prefix = input("Введите префикс: ")
-    if not prefix:
-        prefix = None
+    
 
     label_numbers = range(start_label_number, start_label_number + num_labels + 1)
     os.makedirs("labels", exist_ok=True)
     for index, number in enumerate(label_numbers):
-        value = inventory_label(number, prefix)
-        label_image = generate_label(value, label_size, qr_size_max)
+        value, label = inventory_label(number, prefix)
+        label_image = generate_label(value, label, label_size, qr_size_max)
         label_image.save(f"labels/{index}.bmp")
 
     all_labels_image = complit(num_labels, label_size)
-    all_labels_image = crop_labels(all_labels_image)
+    # all_labels_image = crop_labels(all_labels_image)
     # Сохраняем полученное изображение на жесткий диск
     all_labels_image.save("all_labels.bmp")
     os.startfile("all_labels.bmp", "print")
